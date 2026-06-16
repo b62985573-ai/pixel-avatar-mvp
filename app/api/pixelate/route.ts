@@ -46,11 +46,63 @@ export async function POST(request: Request) {
 
     const faceBox =
       typeof faceBoxValue === "string" ? parseFaceBox(faceBoxValue) : null;
-    const crop = faceBox
+    const preferredCrop = faceBox
       ? getFaceCrop(faceBox, width, height)
       : getFallbackCrop(width, height);
 
-    const enhancedAvatar = await sharp(orientedBuffer)
+    const outputBuffer = await createPixelAvatar({
+      imageBuffer: orientedBuffer,
+      crop: preferredCrop,
+      pixelSize: pixelSizeValue,
+      fallbackCrop: getFallbackCrop(width, height),
+    });
+
+    return new Response(new Uint8Array(outputBuffer), {
+      headers: {
+        "Content-Type": "image/png",
+        "Content-Disposition": 'inline; filename="pixel-avatar.png"',
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    return new Response("Failed to process image.", { status: 500 });
+  }
+}
+
+async function createPixelAvatar({
+  imageBuffer,
+  crop,
+  pixelSize,
+  fallbackCrop,
+}: {
+  imageBuffer: Buffer;
+  crop: { left: number; top: number; size: number };
+  pixelSize: number;
+  fallbackCrop: { left: number; top: number; size: number };
+}) {
+  try {
+    return await processPixelAvatar(imageBuffer, crop, pixelSize);
+  } catch (error) {
+    if (
+      crop.left === fallbackCrop.left &&
+      crop.top === fallbackCrop.top &&
+      crop.size === fallbackCrop.size
+    ) {
+      throw error;
+    }
+
+    console.error("Face crop failed. Retrying with fallback crop.", error);
+    return processPixelAvatar(imageBuffer, fallbackCrop, pixelSize);
+  }
+}
+
+async function processPixelAvatar(
+  imageBuffer: Buffer,
+  crop: { left: number; top: number; size: number },
+  pixelSize: number,
+) {
+  const enhancedAvatar = await sharp(imageBuffer)
       .extract({
         left: crop.left,
         top: crop.top,
@@ -70,33 +122,21 @@ export async function POST(request: Request) {
       .png()
       .toBuffer();
 
-    const pixelGrid = await sharp(enhancedAvatar)
-      .resize(pixelSizeValue, pixelSizeValue, {
+  const pixelGrid = await sharp(enhancedAvatar)
+      .resize(pixelSize, pixelSize, {
         fit: "fill",
         kernel: "nearest",
       })
       .png()
       .toBuffer();
 
-    const outputBuffer = await sharp(pixelGrid)
+  return sharp(pixelGrid)
       .resize(512, 512, {
         fit: "fill",
         kernel: "nearest",
       })
       .png()
       .toBuffer();
-
-    return new Response(new Uint8Array(outputBuffer), {
-      headers: {
-        "Content-Type": "image/png",
-        "Content-Disposition": 'inline; filename="pixel-avatar.png"',
-        "Cache-Control": "no-store",
-      },
-    });
-  } catch (error) {
-    console.error(error);
-    return new Response("Failed to process image.", { status: 500 });
-  }
 }
 
 function parseFaceBox(value: string): FaceBox | null {
