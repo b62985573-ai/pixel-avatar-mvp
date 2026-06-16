@@ -1,0 +1,4 @@
+{
+  "installCommand": "pnpm install --frozen-lockfile --config.optional=true --config.ignore-scripts=false && pnpm rebuild sharp",
+  "buildCommand": "pnpm build"
+}

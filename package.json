@@ -15,6 +15,10 @@
     "react-dom": "19.2.4",
     "sharp": "^0.35.1"
   },
+  "optionalDependencies": {
+    "@img/sharp-libvips-linux-x64": "1.3.0",
+    "@img/sharp-linux-x64": "0.35.1"
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
@@ -29,6 +33,20 @@
     "onlyBuiltDependencies": [
       "sharp",
       "unrs-resolver"
-    ]
+    ],
+    "supportedArchitectures": {
+      "os": [
+        "current",
+        "linux"
+      ],
+      "cpu": [
+        "current",
+        "x64"
+      ],
+      "libc": [
+        "current",
+        "glibc"
+      ]
+    }
   }
 }
