@@ -36,7 +36,8 @@ export async function POST(request: Request) {
     }
 
     const inputBuffer = Buffer.from(await image.arrayBuffer());
-    const metadata = await sharp(inputBuffer).metadata();
+    const orientedBuffer = await sharp(inputBuffer).rotate().png().toBuffer();
+    const metadata = await sharp(orientedBuffer).metadata();
     const { width, height } = metadata;
 
     if (!width || !height) {
@@ -49,7 +50,7 @@ export async function POST(request: Request) {
       ? getFaceCrop(faceBox, width, height)
       : getFallbackCrop(width, height);
 
-    const enhancedAvatar = await sharp(inputBuffer)
+    const enhancedAvatar = await sharp(orientedBuffer)
       .extract({
         left: crop.left,
         top: crop.top,
@@ -142,8 +143,14 @@ function getFallbackCrop(width: number, height: number) {
 
 function getFaceCrop(faceBox: FaceBox, imageWidth: number, imageHeight: number) {
   const fallback = getFallbackCrop(imageWidth, imageHeight);
-  const faceCenterX = faceBox.x + faceBox.width / 2;
-  const faceCenterY = faceBox.y + faceBox.height / 2;
+  const safeFaceBox = normalizeFaceBox(faceBox, imageWidth, imageHeight);
+
+  if (!safeFaceBox) {
+    return fallback;
+  }
+
+  const faceCenterX = safeFaceBox.x + safeFaceBox.width / 2;
+  const faceCenterY = safeFaceBox.y + safeFaceBox.height / 2;
 
   if (!Number.isFinite(faceCenterX) || !Number.isFinite(faceCenterY)) {
     return fallback;
@@ -151,16 +158,17 @@ function getFaceCrop(faceBox: FaceBox, imageWidth: number, imageHeight: number) 
 
   const shortSide = Math.min(imageWidth, imageHeight);
   const isFarPortrait =
-    faceBox.width < imageWidth * 0.12 || faceBox.height < imageHeight * 0.12;
+    safeFaceBox.width < imageWidth * 0.12 ||
+    safeFaceBox.height < imageHeight * 0.12;
   const desiredSize = isFarPortrait
-    ? Math.max(faceBox.width * 4.2, faceBox.height * 5.0)
-    : Math.max(faceBox.width * 3.2, faceBox.height * 3.8);
+    ? Math.max(safeFaceBox.width * 4.2, safeFaceBox.height * 5.0)
+    : Math.max(safeFaceBox.width * 3.2, safeFaceBox.height * 3.8);
   const minSize = shortSide * 0.35;
   const maxSize = shortSide * (isFarPortrait ? 0.8 : 0.9);
   const size = Math.round(clamp(desiredSize, minSize, maxSize));
   const cropCenterX = faceCenterX;
   const cropCenterY =
-    faceCenterY + faceBox.height * (isFarPortrait ? 0.65 : 0.45);
+    faceCenterY + safeFaceBox.height * (isFarPortrait ? 0.65 : 0.45);
   const left = clamp(
     Math.round(cropCenterX - size / 2),
     0,
@@ -173,6 +181,33 @@ function getFaceCrop(faceBox: FaceBox, imageWidth: number, imageHeight: number) 
   );
 
   return { left, top, size };
+}
+
+function normalizeFaceBox(
+  faceBox: FaceBox,
+  imageWidth: number,
+  imageHeight: number,
+) {
+  const x = clamp(Math.round(faceBox.x), 0, imageWidth - 1);
+  const y = clamp(Math.round(faceBox.y), 0, imageHeight - 1);
+  const right = clamp(
+    Math.round(faceBox.x + faceBox.width),
+    x + 1,
+    imageWidth,
+  );
+  const bottom = clamp(
+    Math.round(faceBox.y + faceBox.height),
+    y + 1,
+    imageHeight,
+  );
+  const width = right - x;
+  const height = bottom - y;
+
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { x, y, width, height };
 }
 
 function clamp(value: number, min: number, max: number) {
