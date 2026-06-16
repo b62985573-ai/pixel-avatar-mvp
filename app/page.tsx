@@ -118,14 +118,24 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error(fallbackError);
+        throw new Error("Server pixelation failed.");
       }
 
       const blob = await response.blob();
       if (resultUrl) URL.revokeObjectURL(resultUrl);
       setResultUrl(URL.createObjectURL(blob));
-    } catch (generateError) {
-      setError(generateError instanceof Error ? generateError.message : fallbackError);
+    } catch {
+      try {
+        const blob = await generatePixelAvatarInBrowser(file, pixelSize, faceBox);
+        if (resultUrl) URL.revokeObjectURL(resultUrl);
+        setResultUrl(URL.createObjectURL(blob));
+      } catch (fallbackGenerateError) {
+        setError(
+          fallbackGenerateError instanceof Error
+            ? fallbackError
+            : fallbackError,
+        );
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -345,6 +355,159 @@ function loadImage(src: string) {
     image.onerror = () => reject(new Error("Could not load image."));
     image.src = src;
   });
+}
+
+function loadImageFromFile(file: File) {
+  const objectUrl = URL.createObjectURL(file);
+
+  return loadImage(objectUrl).finally(() => URL.revokeObjectURL(objectUrl));
+}
+
+async function generatePixelAvatarInBrowser(
+  file: File,
+  pixelSize: PixelSize,
+  faceBox: FaceBox | null,
+) {
+  const image = await loadImageFromFile(file);
+  const crop = faceBox
+    ? getFaceCrop(faceBox, image.naturalWidth, image.naturalHeight)
+    : getFallbackCrop(image.naturalWidth, image.naturalHeight);
+  const sourceCanvas = document.createElement("canvas");
+  sourceCanvas.width = 512;
+  sourceCanvas.height = 512;
+
+  const sourceContext = sourceCanvas.getContext("2d");
+  if (!sourceContext) {
+    throw new Error("Canvas is not available.");
+  }
+
+  sourceContext.imageSmoothingEnabled = true;
+  sourceContext.imageSmoothingQuality = "high";
+  sourceContext.drawImage(
+    image,
+    crop.left,
+    crop.top,
+    crop.size,
+    crop.size,
+    0,
+    0,
+    512,
+    512,
+  );
+
+  const smallCanvas = document.createElement("canvas");
+  smallCanvas.width = pixelSize;
+  smallCanvas.height = pixelSize;
+  const smallContext = smallCanvas.getContext("2d");
+  if (!smallContext) {
+    throw new Error("Canvas is not available.");
+  }
+  smallContext.imageSmoothingEnabled = true;
+  smallContext.drawImage(sourceCanvas, 0, 0, pixelSize, pixelSize);
+
+  const outputCanvas = document.createElement("canvas");
+  outputCanvas.width = 512;
+  outputCanvas.height = 512;
+  const outputContext = outputCanvas.getContext("2d");
+  if (!outputContext) {
+    throw new Error("Canvas is not available.");
+  }
+  outputContext.imageSmoothingEnabled = false;
+  outputContext.drawImage(smallCanvas, 0, 0, 512, 512);
+
+  return new Promise<Blob>((resolve, reject) => {
+    outputCanvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Could not generate PNG."));
+        return;
+      }
+
+      resolve(blob);
+    }, "image/png");
+  });
+}
+
+function getFallbackCrop(width: number, height: number) {
+  let size = Math.min(width, height);
+  let left = 0;
+  let top = 0;
+
+  if (width > height) {
+    size = height;
+    left = Math.floor((width - height) / 2);
+  } else if (height > width) {
+    size = width;
+    top = Math.max(0, Math.floor((height - width) * 0.25));
+  }
+
+  return { left, top, size };
+}
+
+function getFaceCrop(faceBox: FaceBox, imageWidth: number, imageHeight: number) {
+  const safeFaceBox = normalizeFaceBox(faceBox, imageWidth, imageHeight);
+
+  if (!safeFaceBox) {
+    return getFallbackCrop(imageWidth, imageHeight);
+  }
+
+  const faceCenterX = safeFaceBox.x + safeFaceBox.width / 2;
+  const faceCenterY = safeFaceBox.y + safeFaceBox.height / 2;
+  const shortSide = Math.min(imageWidth, imageHeight);
+  const isFarPortrait =
+    safeFaceBox.width < imageWidth * 0.12 ||
+    safeFaceBox.height < imageHeight * 0.12;
+  const desiredSize = isFarPortrait
+    ? Math.max(safeFaceBox.width * 4.2, safeFaceBox.height * 5.0)
+    : Math.max(safeFaceBox.width * 3.2, safeFaceBox.height * 3.8);
+  const minSize = shortSide * 0.35;
+  const maxSize = shortSide * (isFarPortrait ? 0.8 : 0.9);
+  const size = Math.round(clamp(desiredSize, minSize, maxSize));
+  const cropCenterX = faceCenterX;
+  const cropCenterY =
+    faceCenterY + safeFaceBox.height * (isFarPortrait ? 0.65 : 0.45);
+  const left = clamp(
+    Math.round(cropCenterX - size / 2),
+    0,
+    imageWidth - size,
+  );
+  const top = clamp(
+    Math.round(cropCenterY - size / 2),
+    0,
+    imageHeight - size,
+  );
+
+  return { left, top, size };
+}
+
+function normalizeFaceBox(
+  faceBox: FaceBox,
+  imageWidth: number,
+  imageHeight: number,
+) {
+  const x = clamp(Math.round(faceBox.x), 0, imageWidth - 1);
+  const y = clamp(Math.round(faceBox.y), 0, imageHeight - 1);
+  const right = clamp(
+    Math.round(faceBox.x + faceBox.width),
+    x + 1,
+    imageWidth,
+  );
+  const bottom = clamp(
+    Math.round(faceBox.y + faceBox.height),
+    y + 1,
+    imageHeight,
+  );
+  const width = right - x;
+  const height = bottom - y;
+
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { x, y, width, height };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 let faceDetectorPromise: Promise<
