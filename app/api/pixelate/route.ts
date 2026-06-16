@@ -1,6 +1,5 @@
-import sharp from "sharp";
-
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const allowedPixelSizes = new Set([32, 64, 128]);
@@ -11,9 +10,11 @@ type FaceBox = {
   width: number;
   height: number;
 };
+type SharpFactory = typeof import("sharp").default;
 
 export async function POST(request: Request) {
   try {
+    const { default: sharp } = await import("sharp");
     const formData = await request.formData();
     const image = formData.get("image");
     const pixelSizeValue = Number(formData.get("pixelSize") ?? 64);
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
       : getFallbackCrop(width, height);
 
     const outputBuffer = await createPixelAvatar({
+      sharp,
       imageBuffer: orientedBuffer,
       crop: preferredCrop,
       pixelSize: pixelSizeValue,
@@ -65,24 +67,29 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Unknown image processing error";
+
     console.error(error);
-    return new Response("Failed to process image.", { status: 500 });
+    return new Response(`Failed to process image: ${message}`, { status: 500 });
   }
 }
 
 async function createPixelAvatar({
+  sharp,
   imageBuffer,
   crop,
   pixelSize,
   fallbackCrop,
 }: {
+  sharp: SharpFactory;
   imageBuffer: Buffer;
   crop: { left: number; top: number; size: number };
   pixelSize: number;
   fallbackCrop: { left: number; top: number; size: number };
 }) {
   try {
-    return await processPixelAvatar(imageBuffer, crop, pixelSize);
+    return await processPixelAvatar(sharp, imageBuffer, crop, pixelSize);
   } catch (error) {
     if (
       crop.left === fallbackCrop.left &&
@@ -93,11 +100,12 @@ async function createPixelAvatar({
     }
 
     console.error("Face crop failed. Retrying with fallback crop.", error);
-    return processPixelAvatar(imageBuffer, fallbackCrop, pixelSize);
+    return processPixelAvatar(sharp, imageBuffer, fallbackCrop, pixelSize);
   }
 }
 
 async function processPixelAvatar(
+  sharp: SharpFactory,
   imageBuffer: Buffer,
   crop: { left: number; top: number; size: number },
   pixelSize: number,
